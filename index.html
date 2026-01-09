@@ -5,7 +5,7 @@
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
   <title>Sales Activity Map</title>
-  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' integrity='sha256-p4QjD5vV0LwNw5rK7qJ8YQZLrjR7v8A6Qz8t6C1BZoM=' crossorigin='anonymous'>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <style>
     html, body, #map { height: 100%; margin: 0; }
     #toolbar { position: absolute; z-index: 1000; top: 10px; left: 10px; right: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -42,19 +42,16 @@
     <div class='legend-item'><span class='dot' style='background:#757575;'></span> Not Demoed</div>
   </div>
 
-  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' integrity='sha256-o9N1jcfq8JbbyG1HsH6v2zqgOUs5x3jzP+AA9H9p+MM=' crossorigin='anonymous'></script>
-  <script src='https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js' integrity='sha384-nn2A3xYPAoWmF5L14zJ7STl4G9qhQGqGk5yIPTDyVbBomQx6ig2W8+7hU3fC0wzL' crossorigin='anonymous'></script>
+  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+  <!-- Papa Parse without SRI to avoid blocking when hash mismatches -->
+  <script src='https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js'></script>
   <script>
-    // === Configuration ===
-    const DATA_FILE = 'data.csv'; // Upload next to index.html
-
     const STATUS_COLORS = {
       'Sold': '#2e7d32',
       'Demoed, Not Sold': '#f57c00',
       'Not Demoed': '#757575'
     };
 
-    // Flexible column mapping: accept multiple header variants
     const headerMap = (h) => {
       const x = String(h || '').trim().toLowerCase();
       if (['appointment date','date','appt date'].includes(x)) return 'date';
@@ -65,28 +62,18 @@
       if (['longitude','lon','lng'].includes(x)) return 'lon';
       if (['sales rep 1: staff name','sales rep','rep','owner'].includes(x)) return 'rep';
       if (['result','status'].includes(x)) return 'result';
-      return x; // keep as-is (ignored later if unused)
+      return x;
     };
 
     function normalizeRow(row) {
       const rec = {};
-      for (const k in row) {
-        rec[headerMap(k)] = row[k];
-      }
-      // Numbers
+      for (const k in row) rec[headerMap(k)] = row[k];
       const lat = parseFloat(rec.lat);
       let lon = parseFloat(rec.lon);
-      if (!Number.isFinite(lon) && typeof rec.lon === 'string') {
-        lon = parseFloat(rec.lon.replace(/[^0-9.-]/g,''));
-      }
-      // Force NM longitudes negative
+      if (!Number.isFinite(lon) && typeof rec.lon === 'string') lon = parseFloat(rec.lon.replace(/[^0-9.-]/g,''));
       if (Number.isFinite(lon)) lon = -Math.abs(lon);
-
-      // Price formatting
       let priceNum = parseFloat(String(rec.price || '').replace(/[^0-9.-]/g,''));
       const priceFmt = Number.isFinite(priceNum) ? `$${priceNum.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : '';
-
-      // Date formatting (YYYY-MM-DD if parsable)
       let dateStr = '';
       if (rec.date) {
         const d = new Date(rec.date);
@@ -97,17 +84,9 @@
           dateStr = `${y}-${m}-${da}`;
         }
       }
-
-      return {
-        lat: Number.isFinite(lat) ? lat : null,
-        lon: Number.isFinite(lon) ? lon : null,
-        prospect: String(rec.prospect || ''),
-        address: String(rec.address || ''),
-        rep: String(rec.rep || ''),
-        result: String(rec.result || ''),
-        price: priceFmt,
-        date: dateStr
-      };
+      return { lat: Number.isFinite(lat) ? lat : null, lon: Number.isFinite(lon) ? lon : null,
+        prospect: String(rec.prospect || ''), address: String(rec.address || ''), rep: String(rec.rep || ''),
+        result: String(rec.result || ''), price: priceFmt, date: dateStr };
     }
 
     function buildMap(records) {
@@ -115,27 +94,18 @@
       statusEl.textContent = `${records.length.toLocaleString()} records loaded`;
 
       const map = L.map('map');
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors'
-      }).addTo(map);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
 
       const valid = records.filter(r => r.lat != null && r.lon != null);
       const latlngs = valid.map(d => [d.lat, d.lon]);
-      if (latlngs.length) {
-        map.fitBounds(latlngs, {padding:[20,20]});
-      } else {
-        map.setView([35.0853, -106.6056], 11);
-      }
+      if (latlngs.length) map.fitBounds(latlngs, {padding:[20,20]}); else map.setView([35.0853, -106.6056], 11);
 
       const groups = { 'Sold': L.layerGroup().addTo(map), 'Demoed, Not Sold': L.layerGroup().addTo(map), 'Not Demoed': L.layerGroup().addTo(map) };
       const markers = [];
 
       valid.forEach(d => {
         const color = STATUS_COLORS[d.result] || '#1976d2';
-        const m = L.circleMarker([d.lat, d.lon], {
-          radius: 8, color: '#333', weight: 1, fillColor: color, fillOpacity: 0.9
-        });
+        const m = L.circleMarker([d.lat, d.lon], { radius: 8, color: '#333', weight: 1, fillColor: color, fillOpacity: 0.9 });
         const appleMapsUrl = `https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`;
         const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`;
         const html = `
@@ -159,22 +129,17 @@
         markers.push({ marker: m, d });
       });
 
-      // Search
       const searchInput = document.getElementById('search');
       searchInput.addEventListener('input', () => {
         const q = searchInput.value.toLowerCase();
         markers.forEach(m => {
           const t = `${m.d.prospect} ${m.d.address} ${m.d.rep} ${m.d.result}`.toLowerCase();
           const match = !q || t.includes(q);
-          if (match) {
-            if (!map.hasLayer(m.marker)) m.marker.addTo(map);
-          } else {
-            if (map.hasLayer(m.marker)) m.marker.remove();
-          }
+          if (match) { if (!map.hasLayer(m.marker)) m.marker.addTo(map); }
+          else { if (map.hasLayer(m.marker)) m.marker.remove(); }
         });
       });
 
-      // Status toggles
       document.querySelectorAll('input[type=checkbox][data-status]').forEach(cb => {
         cb.addEventListener('change', () => {
           const status = cb.getAttribute('data-status');
@@ -185,28 +150,27 @@
 
     function loadCsv() {
       const statusEl = document.getElementById('status');
-      Papa.parse(DATA_FILE, {
+      const url = 'data.csv?v=' + Date.now(); // cache-bust per load
+      Papa.parse(url, {
         download: true,
         header: true,
         skipEmptyLines: true,
-        dynamicTyping: false,
-        beforeFirstChunk: function(chunk) {
-          // no-op, keep as is
-        },
         error: function(err) {
-          statusEl.textContent = 'Failed to load data.csv: ' + err;
+          statusEl.textContent = 'Failed to load data.csv';
+          console.error('Papa Parse error:', err);
         },
         complete: function(res) {
           const rows = res.data || [];
           const records = rows.map(normalizeRow).filter(r => r.lat !== null && r.lon !== null);
+          if (!records.length) {
+            statusEl.textContent = 'No valid rows found. Check CSV headers and lat/lon values.';
+          }
           buildMap(records);
         }
       });
     }
 
-    // Prevent CDN/browser caching stale CSV when you upload a new one
-    // If needed, you can append ?v=<timestamp> to DATA_FILE instead of using cache: 'no-store'
-    loadCsv();
+    try { loadCsv(); } catch(e) { console.error(e); document.getElementById('status').textContent = 'Script error: ' + e; }
   </script>
 </body>
 </html>
