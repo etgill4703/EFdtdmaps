@@ -4,64 +4,76 @@
 <head>
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <title>Door-To-Door Interactive Map (NM-only) — Canonical</title>
+  <title>Door-To-Door Interactive Map (NM-only) — Satellite Default</title>
   <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css'>
   <style>
     html, body, #map { height: 100%; margin: 0; }
-    #toolbar { position: absolute; z-index: 1000; top: 10px; left: 10px; right: 10px; display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+    #toolbar { position: absolute; z-index: 1000; top: 10px; left: 10px; right: 10px; display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; }
     .panel { background: rgba(255,255,255,0.95); border: 1px solid #ddd; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; }
     .panel label { font-size: 14px; font-weight: 600; }
     .search-input { flex: 1; min-width: 220px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 14px; }
-    .chip { padding: 6px 10px; border-radius: 20px; color: #fff; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+    .chip { padding: 6px 10px; border-radius: 20px; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
     .legend { position:absolute; bottom:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px; font-size:13px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
     .legend-item { display:flex; align-items:center; gap:6px; margin:4px 0; }
-    .dot { width:12px; height:12px; border-radius:50%; display:inline-block; }
+    .dot { width:14px; height:14px; border-radius:50%; display:inline-block; box-shadow: 0 0 0 2px #000 inset; }
     #status { position:absolute; top:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px 12px; font: 13px/1.3 Segoe UI,Arial; max-width: 40vw; }
     #error { position:absolute; top:60px; right:10px; background:#ffecec; color:#b00020; border:1px solid #ffb4b4; border-radius:6px; padding:10px 12px; font: 13px/1.3 Segoe UI,Arial; max-width: 40vw; display:none; }
-    @media (max-width: 840px){ #toolbar{ grid-template-columns: 1fr; } }
+    @media (max-width: 980px){ #toolbar{ grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <div id='toolbar'>
+    <!-- Search -->
     <div class='panel'>
       <label for='search'>Search:</label>
       <input id='search' class='search-input' type='text' placeholder='Prospect, address, sales rep or result...' />
     </div>
+
+    <!-- Base map toggle -->
+    <div class='panel' id='basePanel'>
+      <label>Base map:</label>
+      <label><input type='radio' name='base' value='satellite' checked> Satellite</label>
+      <label><input type='radio' name='base' value='street'> Street</label>
+    </div>
+
+    <!-- View options -->
     <div class='panel' id='viewPanel'>
       <label>View:</label>
       <label><input type='radio' name='view' value='cluster' checked> Cluster markers</label>
       <label><input type='radio' name='view' value='dots'> Show dots</label>
-      <label><input type='checkbox' id='heatToggle'> Show heatmap (All results)</label>
+      <label><input type='checkbox' id='heatToggle'> Heatmap (Sales only)</label>
     </div>
+
+    <!-- Filters -->
     <div class='panel'>
       <div>
-        <label for='rep'>Rep selector:</label>
+        <label for='rep'>Rep:</label>
         <select id='rep'><option value='*'>All reps</option></select>
       </div>
       <div>
-        <label>Status filter:</label>
+        <label>Status:</label>
         <label class='chip' style='background:#666'><input type='radio' name='status' value='*' checked> All</label>
-        <label class='chip' style='background:#2e7d32'><input type='radio' name='status' value='Sold'> Sold</label>
-        <label class='chip' style='background:#757575'><input type='radio' name='status' value='Not Sold'> Not Sold</label>
+        <label class='chip' style='background:#00e676'><input type='radio' name='status' value='Sold'> Sold</label>
+        <label class='chip' style='background:#ff1744'><input type='radio' name='status' value='Not Sold'> Not Sold</label>
       </div>
     </div>
   </div>
 
   <div id='map'></div>
   <div id='status'>Filtered to New Mexico bounds: lat 31.33–37.0, lng -109.06–-103.0.</div>
-  <div id='error'>Map libraries failed to load. Your network may block CDNs. Try another browser/network or ask IT to allow unpkg.com and tile servers.</div>
+  <div id='error'>Map libraries failed to load. Your network may block CDNs. Try another browser/network or ask IT to allow unpkg.com, jsDelivr, and tile servers.</div>
 
   <div class='legend'>
     <div><strong>Legend:</strong></div>
-    <div class='legend-item'><span class='dot' style='background:#2e7d32;'></span> Sold</div>
-    <div class='legend-item'><span class='dot' style='background:#757575;'></span> Not Sold (all statuses not exactly "Sold")</div>
+    <div class='legend-item'><span class='dot' style='background:#00e676;'></span> Sold (high‑vis green)</div>
+    <div class='legend-item'><span class='dot' style='background:#ff1744;'></span> Not Sold (high‑vis red)</div>
   </div>
 
   <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
   <script>
-    // Load supporting libraries with fallback
+    // Helper: load scripts with fallback
     function loadScript(srcs, onload){
       (function tryLoad(i){
         var s=document.createElement('script'); s.src=srcs[i];
@@ -70,22 +82,29 @@
         document.head.appendChild(s);
       })(0);
     }
+
+    // Load libs then start
     loadScript([
       'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
       'https://unpkg.com/papaparse@5.4.1/papaparse.min.js'
     ], function(){
-      loadScript([
-        'https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'
-      ], function(){
-        loadScript([
-          'https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'
-        ], start);
+      loadScript(['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], function(){
+        loadScript(['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'], start);
       });
     });
 
+    // Constants
     const NM = { minLat:31.33, maxLat:37.0, minLon:-109.06, maxLon:-103.0 };
-    const STATUS_COLORS = { 'Sold':'#2e7d32', 'Not Sold':'#757575' };
+    const STATUS_COLORS = { 'Sold':'#00e676', 'Not Sold':'#ff1744' }; // high‑visibility palette
+    const LS_KEY = 'nmMapPrefs_v2';
 
+    // Preferences: load/save
+    function loadPrefs(){
+      try{ const raw = localStorage.getItem(LS_KEY); return raw? JSON.parse(raw) : {}; }catch(e){ return {}; }
+    }
+    function savePrefs(p){ try{ localStorage.setItem(LS_KEY, JSON.stringify(p)); }catch(e){} }
+
+    // Header normalization
     function normalizeHeader(h){
       const zwnbsp='\ufeff';
       let x=String(h||'').replace(new RegExp(zwnbsp,'g'),'').trim().toLowerCase();
@@ -100,8 +119,10 @@
       return x;
     }
 
+    // Numeric cleaning
     function toNum(v){ if(v==null) return null; const s=String(v); const s2=s.replace(/[^0-9.+-]/g,''); const n=Number.parseFloat(s2); return Number.isFinite(n)?n:null; }
 
+    // Row normalization
     function normalizeRow(row){
       const rec={}; for(const k in row) rec[normalizeHeader(k)] = row[k];
       const lat=toNum(rec.lat); let lon=toNum(rec.lon); if(lon!=null) lon = -Math.abs(lon);
@@ -113,8 +134,10 @@
       return { lat, lon, inNM, prospect:String(rec.prospect||''), address:String(rec.address||''), rep:String(rec.rep||''), result:resultRaw, status:statusNorm, price:priceFmt, date:dateStr };
     }
 
+    // Globals
     let allRecords=[];
-    let map, clusterLayer, dotsLayer, heatLayer;
+    let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer;
+    let prefs = loadPrefs();
 
     function start(){
       const statusEl=document.getElementById('status');
@@ -124,25 +147,40 @@
         complete: function(res){
           const rows = res.data||[];
           allRecords = rows.map(normalizeRow).filter(r=>r.inNM);
-          statusEl.textContent = `Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${allRecords.length.toLocaleString()} records in view.`;
-          buildMap(); buildControls(); render();
+          buildMap(); buildControls(); restorePrefs(); render();
         }
       });
     }
 
     function buildMap(){
       map = L.map('map');
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+      // Base layers
+      baseStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' });
+      baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19,
+        attribution: 'Tiles \u00A9 Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'
+      });
+      baseSat.addTo(map); // default satellite
+
+      // Bounds (NM)
       const southWest = L.latLng(NM.minLat, NM.minLon), northEast = L.latLng(NM.maxLat, NM.maxLon);
       const bounds = L.latLngBounds(southWest, northEast);
       map.fitBounds(bounds, {padding:[20,20]});
       map.setMaxBounds(bounds.pad(0.1));
+
       clusterLayer = L.markerClusterGroup({ showCoverageOnHover:false, disableClusteringAtZoom: 15 });
       dotsLayer = L.layerGroup();
-      heatLayer = L.heatLayer([], { radius: 25, blur: 15, maxZoom: 17 });
-      heatLayer.addTo(map);
+      heatLayer = L.heatLayer([], { radius: 28, blur: 20, maxZoom: 17 });
+
       map.addLayer(clusterLayer);
       map.addLayer(dotsLayer);
+
+      // Persist center/zoom
+      map.on('moveend zoomend', function(){
+        prefs.center = map.getCenter();
+        prefs.zoom = map.getZoom();
+        savePrefs(prefs);
+      });
     }
 
     function popupHtml(d){
@@ -169,7 +207,10 @@
       const repSel = document.getElementById('rep').value;
       const statusSel = document.querySelector('input[name=status]:checked').value;
       const q = document.getElementById('search').value.trim().toLowerCase();
-      return { repSel, statusSel, q };
+      const baseSel = document.querySelector('input[name=base]:checked').value;
+      const viewSel = document.querySelector('input[name=view]:checked').value;
+      const heatOn = document.getElementById('heatToggle').checked;
+      return { repSel, statusSel, q, baseSel, viewSel, heatOn };
     }
 
     function applyFilters(){
@@ -186,32 +227,60 @@
     }
 
     function render(){
+      const statusEl=document.getElementById('status');
+      const {baseSel, viewSel, heatOn} = currentFilters();
+
+      // Base layer switch
+      if (baseSel==='street'){
+        if (map.hasLayer(baseSat)) map.removeLayer(baseSat);
+        if (!map.hasLayer(baseStreet)) baseStreet.addTo(map);
+        prefs.base = 'street';
+      } else {
+        if (map.hasLayer(baseStreet)) map.removeLayer(baseStreet);
+        if (!map.hasLayer(baseSat)) baseSat.addTo(map);
+        prefs.base = 'satellite';
+      }
+
+      // Main layers
       const records = applyFilters();
-      const view = document.querySelector('input[name=view]:checked').value;
-      // Clear layers
       clusterLayer.clearLayers();
       dotsLayer.clearLayers();
-      heatLayer.setLatLngs([]);
-      // Heatmap uses all in-NM points (unfiltered) if toggle checked
-      const heatOn = document.getElementById('heatToggle').checked;
+
+      // Heatmap of SOLD ONLY, respecting rep/search filters (ignores Status chip)
+      map.removeLayer(heatLayer);
       if (heatOn){
-        heatLayer.setLatLngs(allRecords.filter(r=>r.lat!=null && r.lon!=null).map(r=>[r.lat,r.lon]));
-      }
-      if (view==='cluster'){
-        records.forEach(d=>{
-          const color = STATUS_COLORS[d.status] || '#1976d2';
-          const m = L.circleMarker([d.lat,d.lon], { radius:8, color:'#333', weight:1, fillColor:color, fillOpacity:0.9 });
-          m.bindPopup(popupHtml(d));
-          clusterLayer.addLayer(m);
+        const soldSubset = allRecords.filter(r=>r.status==='Sold').filter(r=>{
+          // apply rep & search filters only
+          const {repSel, q} = currentFilters();
+          if (repSel!=='*' && r.rep!==repSel) return false;
+          if (q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; }
+          return true;
         });
+        heatLayer.setLatLngs(soldSubset.map(r=>[r.lat,r.lon]));
+        heatLayer.addTo(map);
+      }
+
+      // Marker style (high‑vis)
+      function mk(d){
+        const color = STATUS_COLORS[d.status] || '#1976d2';
+        const m = L.circleMarker([d.lat,d.lon], { radius: 10, color: '#000', weight: 2, fillColor: color, fillOpacity: 1.0 });
+        m.bindPopup(popupHtml(d));
+        return m;
+      }
+
+      if (viewSel==='cluster'){
+        records.forEach(d=>{ clusterLayer.addLayer(mk(d)); });
       } else {
-        records.forEach(d=>{
-          const color = STATUS_COLORS[d.status] || '#1976d2';
-          const m = L.circleMarker([d.lat,d.lon], { radius:8, color:'#333', weight:1, fillColor:color, fillOpacity:0.9 });
-          m.bindPopup(popupHtml(d));
-          m.addTo(dotsLayer);
-        });
+        records.forEach(d=>{ mk(d).addTo(dotsLayer); });
       }
+
+      // Status banner
+      statusEl.textContent = `Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${records.length.toLocaleString()} records in view.`;
+
+      // Save prefs
+      const {repSel, statusSel, q, heatOn: h} = currentFilters();
+      prefs.repSel = repSel; prefs.statusSel = statusSel; prefs.q = q; prefs.view = viewSel; prefs.heat = h;
+      savePrefs(prefs);
     }
 
     function buildControls(){
@@ -224,7 +293,24 @@
       repSel.addEventListener('change', render);
       document.querySelectorAll('input[name=status]').forEach(el=> el.addEventListener('change', render));
       document.querySelectorAll('input[name=view]').forEach(el=> el.addEventListener('change', render));
+      document.querySelectorAll('input[name=base]').forEach(el=> el.addEventListener('change', render));
       document.getElementById('heatToggle').addEventListener('change', render);
+    }
+
+    function restorePrefs(){
+      // Base
+      if (prefs.base){ const el = document.querySelector(`input[name=base][value=${prefs.base}]`); if (el){ el.checked = true; } }
+      // View
+      if (prefs.view){ const el = document.querySelector(`input[name=view][value=${prefs.view}]`); if (el){ el.checked = true; } }
+      // Filters
+      if (prefs.repSel){ const repSel=document.getElementById('rep'); if ([...repSel.options].some(o=>o.value===prefs.repSel)){ repSel.value=prefs.repSel; } }
+      if (prefs.statusSel){ const el = document.querySelector(`input[name=status][value='${prefs.statusSel}']`); if (el){ el.checked=true; } }
+      if (typeof prefs.heat==='boolean'){ document.getElementById('heatToggle').checked = prefs.heat; }
+      if (prefs.q){ document.getElementById('search').value = prefs.q; }
+      // Center/zoom
+      if (prefs.center && typeof prefs.center.lat==='number' && typeof prefs.center.lng==='number' && typeof prefs.zoom==='number'){
+        map.setView([prefs.center.lat, prefs.center.lng], prefs.zoom);
+      }
     }
   </script>
 </body>
