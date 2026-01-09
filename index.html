@@ -4,7 +4,7 @@
 <head>
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <title>Sales Activity Map</title>
+  <title>Sales Activity Map — CSV Loader (Robust)</title>
   <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <style>
     html, body, #map { height: 100%; margin: 0; }
@@ -13,12 +13,13 @@
     .chip input { margin-right: 6px; accent-color: #0067b8; }
     .panel { background: rgba(255,255,255,0.95); border: 1px solid #ddd; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; }
     .panel label { font-size: 14px; font-weight: 600; }
-    .search-input { flex: 1; min-width: 200px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 14px; }
+    .search-input { flex: 1; min-width: 220px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 14px; }
     .legend { position:absolute; bottom:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px; font-size:13px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
     .legend-item { display:flex; align-items:center; gap:6px; margin:4px 0; }
     .dot { width:12px; height:12px; border-radius:50%; display:inline-block; }
-    @media (pointer: coarse) { .search-input { font-size: 16px; } }
-    #status { position:absolute; top:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px 12px; font: 13px/1.3 Segoe UI,Arial; }
+    #status { position:absolute; top:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px 12px; font: 13px/1.3 Segoe UI,Arial; max-width: 40vw; }
+    #error { position:absolute; top:60px; right:10px; background:#ffecec; color:#b00020; border:1px solid #ffb4b4; border-radius:6px; padding:10px 12px; font: 13px/1.3 Segoe UI,Arial; max-width: 40vw; display:none; }
+    pre { white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body>
@@ -36,6 +37,7 @@
   </div>
   <div id='map'></div>
   <div id='status'>Loading data…</div>
+  <div id='error'></div>
   <div class='legend'>
     <div class='legend-item'><span class='dot' style='background:#2e7d32;'></span> Sold</div>
     <div class='legend-item'><span class='dot' style='background:#f57c00;'></span> Demoed, Not Sold</div>
@@ -43,17 +45,36 @@
   </div>
 
   <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-  <!-- Papa Parse without SRI to avoid blocking when hash mismatches -->
-  <script src='https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js'></script>
   <script>
+    // Load Papa Parse with fallback
+    (function loadPapa(i){
+      var urls = [
+        'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
+        'https://unpkg.com/papaparse@5.4.1/papaparse.min.js'
+      ];
+      var s = document.createElement('script');
+      s.src = urls[i] || urls[0];
+      s.onload = start;
+      s.onerror = function(){ if(i+1<urls.length) loadPapa(i+1); else showError('Failed to load Papa Parse from CDNs.'); };
+      document.head.appendChild(s);
+    })(0);
+
+    function showError(msg, detail){
+      const box = document.getElementById('error');
+      box.style.display = 'block';
+      box.innerHTML = '<strong>Error:</strong> ' + msg + (detail?'<pre>'+detail+'</pre>':'');
+      console.error(msg, detail||'');
+    }
+
     const STATUS_COLORS = {
       'Sold': '#2e7d32',
       'Demoed, Not Sold': '#f57c00',
       'Not Demoed': '#757575'
     };
 
-    const headerMap = (h) => {
-      const x = String(h || '').trim().toLowerCase();
+    function normalizeHeader(h){
+      const zwnbsp = '\\ufeff'; // BOM
+      let x = String(h||'').replace(new RegExp(zwnbsp, 'g'),'').trim().toLowerCase();
       if (['appointment date','date','appt date'].includes(x)) return 'date';
       if (['address','street'].includes(x)) return 'address';
       if (['prospect: prospect name','prospect','customer','name'].includes(x)) return 'prospect';
@@ -61,51 +82,37 @@
       if (['latitude','lat'].includes(x)) return 'lat';
       if (['longitude','lon','lng'].includes(x)) return 'lon';
       if (['sales rep 1: staff name','sales rep','rep','owner'].includes(x)) return 'rep';
-      if (['result','status'].includes(x)) return 'result';
+      if (['result','status','result detail'].includes(x)) return 'result';
       return x;
-    };
+    }
 
     function normalizeRow(row) {
       const rec = {};
-      for (const k in row) rec[headerMap(k)] = row[k];
-      const lat = parseFloat(rec.lat);
-      let lon = parseFloat(rec.lon);
-      if (!Number.isFinite(lon) && typeof rec.lon === 'string') lon = parseFloat(rec.lon.replace(/[^0-9.-]/g,''));
-      if (Number.isFinite(lon)) lon = -Math.abs(lon);
-      let priceNum = parseFloat(String(rec.price || '').replace(/[^0-9.-]/g,''));
-      const priceFmt = Number.isFinite(priceNum) ? `$${priceNum.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : '';
-      let dateStr = '';
-      if (rec.date) {
-        const d = new Date(rec.date);
-        if (!isNaN(d)) {
-          const y = d.getFullYear();
-          const m = String(d.getMonth()+1).padStart(2,'0');
-          const da = String(d.getDate()).padStart(2,'0');
-          dateStr = `${y}-${m}-${da}`;
-        }
-      }
-      return { lat: Number.isFinite(lat) ? lat : null, lon: Number.isFinite(lon) ? lon : null,
-        prospect: String(rec.prospect || ''), address: String(rec.address || ''), rep: String(rec.rep || ''),
-        result: String(rec.result || ''), price: priceFmt, date: dateStr };
+      for (const k in row) rec[normalizeHeader(k)] = row[k];
+      const toNum = (v)=>{ if(v==null) return null; const s=String(v); const s2=s.replace(/[^0-9.+-]/g,''); const n=Number.parseFloat(s2); return Number.isFinite(n)?n:null; };
+      const lat = toNum(rec.lat);
+      let lon = toNum(rec.lon);
+      if (lon!=null) lon = -Math.abs(lon);
+      const priceNum = toNum(rec.price);
+      const priceFmt = priceNum!=null? priceNum.toLocaleString(undefined,{style:'currency',currency:'USD'}) : '';
+      let dateStr='';
+      if (rec.date){ const d=new Date(rec.date); if(!isNaN(d)){ const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const da=String(d.getDate()).padStart(2,'0'); dateStr=`${y}-${m}-${da}`; } }
+      return { lat, lon, prospect: String(rec.prospect||''), address: String(rec.address||''), rep: String(rec.rep||''), result: String(rec.result||''), price: priceFmt, date: dateStr };
     }
 
-    function buildMap(records) {
+    function buildMap(records){
       const statusEl = document.getElementById('status');
       statusEl.textContent = `${records.length.toLocaleString()} records loaded`;
-
       const map = L.map('map');
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
-
-      const valid = records.filter(r => r.lat != null && r.lon != null);
-      const latlngs = valid.map(d => [d.lat, d.lon]);
-      if (latlngs.length) map.fitBounds(latlngs, {padding:[20,20]}); else map.setView([35.0853, -106.6056], 11);
-
+      const valid = records.filter(r=>r.lat!=null && r.lon!=null);
+      const latlngs = valid.map(d=>[d.lat,d.lon]);
+      if (latlngs.length) map.fitBounds(latlngs,{padding:[20,20]}); else map.setView([35.0853,-106.6056],11);
       const groups = { 'Sold': L.layerGroup().addTo(map), 'Demoed, Not Sold': L.layerGroup().addTo(map), 'Not Demoed': L.layerGroup().addTo(map) };
-      const markers = [];
-
-      valid.forEach(d => {
+      const markers=[];
+      valid.forEach(d=>{
         const color = STATUS_COLORS[d.result] || '#1976d2';
-        const m = L.circleMarker([d.lat, d.lon], { radius: 8, color: '#333', weight: 1, fillColor: color, fillOpacity: 0.9 });
+        const m = L.circleMarker([d.lat,d.lon],{radius:8,color:'#333',weight:1,fillColor:color,fillOpacity:0.9});
         const appleMapsUrl = `https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`;
         const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`;
         const html = `
@@ -126,51 +133,46 @@
         m.bindPopup(html);
         const key = STATUS_COLORS[d.result] ? d.result : 'Not Demoed';
         m.addTo(groups[key]);
-        markers.push({ marker: m, d });
+        markers.push({marker:m,d});
       });
-
-      const searchInput = document.getElementById('search');
-      searchInput.addEventListener('input', () => {
-        const q = searchInput.value.toLowerCase();
-        markers.forEach(m => {
-          const t = `${m.d.prospect} ${m.d.address} ${m.d.rep} ${m.d.result}`.toLowerCase();
-          const match = !q || t.includes(q);
-          if (match) { if (!map.hasLayer(m.marker)) m.marker.addTo(map); }
-          else { if (map.hasLayer(m.marker)) m.marker.remove(); }
+      const searchInput=document.getElementById('search');
+      searchInput.addEventListener('input',()=>{
+        const q=searchInput.value.toLowerCase();
+        markers.forEach(m=>{
+          const t=`${m.d.prospect} ${m.d.address} ${m.d.rep} ${m.d.result}`.toLowerCase();
+          const match=!q || t.includes(q);
+          if (match) { if(!map.hasLayer(m.marker)) m.marker.addTo(map); }
+          else { if(map.hasLayer(m.marker)) m.marker.remove(); }
         });
       });
-
-      document.querySelectorAll('input[type=checkbox][data-status]').forEach(cb => {
-        cb.addEventListener('change', () => {
-          const status = cb.getAttribute('data-status');
+      document.querySelectorAll('input[type=checkbox][data-status]').forEach(cb=>{
+        cb.addEventListener('change',()=>{
+          const status=cb.getAttribute('data-status');
           if (cb.checked) groups[status].addTo(map); else map.removeLayer(groups[status]);
         });
       });
     }
 
-    function loadCsv() {
-      const statusEl = document.getElementById('status');
-      const url = 'data.csv?v=' + Date.now(); // cache-bust per load
-      Papa.parse(url, {
-        download: true,
-        header: true,
-        skipEmptyLines: true,
-        error: function(err) {
-          statusEl.textContent = 'Failed to load data.csv';
-          console.error('Papa Parse error:', err);
-        },
-        complete: function(res) {
-          const rows = res.data || [];
-          const records = rows.map(normalizeRow).filter(r => r.lat !== null && r.lon !== null);
-          if (!records.length) {
-            statusEl.textContent = 'No valid rows found. Check CSV headers and lat/lon values.';
+    function start(){
+      try{
+        const statusEl = document.getElementById('status');
+        const url = 'data.csv?v='+Date.now();
+        Papa.parse(url, {
+          download:true,
+          header:true,
+          skipEmptyLines:true,
+          error: function(err){ showError('Failed to load data.csv', JSON.stringify(err)); statusEl.textContent='Failed to load data.csv'; },
+          complete: function(res){
+            const rows = res.data||[];
+            if (!rows.length) { showError('data.csv loaded but zero rows parsed.'); statusEl.textContent='No rows parsed'; }
+            const recs = rows.map(normalizeRow);
+            const valid = recs.filter(r=>r.lat!=null && r.lon!=null);
+            if (!valid.length) { showError('Parsed rows, but none had valid lat/lon.'); }
+            buildMap(recs);
           }
-          buildMap(records);
-        }
-      });
+        });
+      }catch(e){ showError('Script error', e && (e.stack||e.message||String(e))); }
     }
-
-    try { loadCsv(); } catch(e) { console.error(e); document.getElementById('status').textContent = 'Script error: ' + e; }
   </script>
 </body>
 </html>
