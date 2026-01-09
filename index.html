@@ -4,8 +4,8 @@
 <head>
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <title>Door-To-Door Map — Sales Count Heat + Marker None Mode</title>
-  <meta name='build' content='nmMapPrefs_v7'>
+  <title>Door-To-Door Map — Sales Count Heat + My Location</title>
+  <meta name='build' content='nmMapPrefs_v8'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css'>
@@ -16,6 +16,7 @@
     .panel label { font-size: 14px; font-weight: 600; }
     .search-input { flex: 1; min-width: 220px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 14px; }
     .btn { background:#0067b8; color:#fff; border:none; border-radius:6px; padding:8px 10px; font-weight:700; cursor:pointer; }
+    .btn.secondary { background:#444; }
     .chip { padding: 6px 10px; border-radius: 20px; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
     .legend { position:absolute; bottom:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px; font-size:13px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
     .legend-item { display:flex; align-items:center; gap:6px; margin:4px 0; }
@@ -31,6 +32,7 @@
       <label for='search'>Search:</label>
       <input id='search' class='search-input' type='text' placeholder='Prospect, address, sales rep or result...' />
       <button id='gotoBtn' class='btn' title='Go to address'>📍 Go</button>
+      <button id='locateBtn' class='btn secondary' title='Use my location'>🎯 My location</button>
     </div>
     <div class='panel' id='basePanel'>
       <label>Base map:</label>
@@ -72,7 +74,7 @@
   <script>
     const NM = { minLat:31.33, maxLat:37.0, minLon:-109.06, maxLon:-103.0 };
     const STATUS_COLORS = { 'Sold':'#00e676', 'Not Sold':'#ff1744' };
-    const LS_KEY = 'nmMapPrefs_v7';
+    const LS_KEY = 'nmMapPrefs_v8';
     const NOMINATIM = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=';
 
     function loadPrefs(){ try{ const raw = localStorage.getItem(LS_KEY); return raw? JSON.parse(raw) : {}; }catch(e){ return {}; } }
@@ -85,73 +87,43 @@
     function normalizeRow(row){ const rec={}; for(const k in row) rec[normalizeHeader(k)] = row[k]; const lat=toNum(rec.lat); let lon=toNum(rec.lon); if(lon!=null) lon=-Math.abs(lon); const inNM=(lat!=null && lon!=null && lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon); const priceNum=toNum(rec.price); const priceFmt=priceNum!=null? priceNum.toLocaleString(undefined,{style:'currency',currency:'USD'}) : ''; let dateStr=''; if(rec.date){ const d=new Date(rec.date); if(!isNaN(d)){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), da=String(d.getDate()).padStart(2,'0'); dateStr=`${y}-${m}-${da}`; }} const resultRaw=String(rec.result||'').trim(); const statusNorm=(resultRaw==='Sold')?'Sold':'Not Sold'; return { lat, lon, inNM, prospect:String(rec.prospect||''), address:String(rec.address||''), rep:String(rec.rep||''), result:resultRaw, status:statusNorm, priceNum, price:priceFmt, date:dateStr };
     }
 
-    let allRecords=[]; let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker; let prefs=loadPrefs();
+    let allRecords=[]; let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker, meMarker; let prefs=loadPrefs();
 
     function loadScript(srcs, onload){ (function t(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) t(i+1); else showErr('Script load failed: '+srcs[i]); }; document.head.appendChild(s); })(0); }
 
-    function buildMap(){ map=L.map('map'); baseStreet=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}); baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'}); baseSat.addTo(map); const sw=L.latLng(NM.minLat,NM.minLon), ne=L.latLng(NM.maxLat,NM.maxLon); const b=L.latLngBounds(sw,ne); map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1)); clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15}); dotsLayer=L.layerGroup().addTo(map); if(L.heatLayer){
-        // Aggressive heat tuned for COUNT peaks
-        heatLayer=L.heatLayer([], { radius: 48, blur: 10, maxZoom: 17, minOpacity: 0.35, max: 2.0 });
-        map.addLayer(heatLayer);
-      } else { heatLayer=null; console.warn('leaflet.heat not available'); }
-      map.addLayer(clusterLayer);
-      map.on('moveend zoomend', ()=>{ prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); }); }
+    function buildMap(){ map=L.map('map'); baseStreet=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}); baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'}); baseSat.addTo(map); const sw=L.latLng(NM.minLat,NM.minLon), ne=L.latLng(NM.maxLat,NM.maxLon); const b=L.latLngBounds(sw,ne); map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1)); clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15}); dotsLayer=L.layerGroup().addTo(map); if(L.heatLayer){ heatLayer=L.heatLayer([], { radius: 48, blur: 10, maxZoom: 17, minOpacity: 0.35, max: 2.0 }); map.addLayer(heatLayer); } else { heatLayer=null; console.warn('leaflet.heat not available'); } map.addLayer(clusterLayer); map.on('moveend zoomend', ()=>{ prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); }); }
 
     function popupHtml(d){ const apple=`https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`; const google=`https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`; return `<div style="font-family:Segoe UI, Arial; min-width:240px"><div style="font-size:15px; font-weight:700;">${d.prospect||'Prospect'}</div><div style="margin-top:4px;">${d.address||''}</div><div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:10px;"><span><strong>Date:</strong> ${d.date||''}</span><span><strong>Rep:</strong> ${d.rep||''}</span><span><strong>Status:</strong> ${d.status} ${d.result && d.result!=='Sold' ? `(${d.result})` : ''}</span><span><strong>Price:</strong> ${d.price||''}</span></div><div style="margin-top:8px; display:flex; gap:8px;"><a href="${apple}" target="_blank" rel="noopener">Apple Maps</a><a href="${google}" target="_blank" rel="noopener">Google Maps</a></div></div>`; }
 
     function currentFilters(){ const repSel=document.getElementById('rep').value; const statusSel=document.querySelector('input[name=status]:checked').value; const q=document.getElementById('search').value.trim().toLowerCase(); const baseSel=document.querySelector('input[name=base]:checked').value; const viewSel=document.querySelector('input[name=view]:checked').value; const heatOn=document.getElementById('heatToggle').checked; return {repSel,statusSel,q,baseSel,viewSel,heatOn}; }
     function applyFilters(){ const {repSel,statusSel,q}=currentFilters(); return allRecords.filter(d=>{ if(repSel!=='*' && d.rep!==repSel) return false; if(statusSel!=='*' && d.status!==statusSel) return false; if(q){ const t=`${d.prospect} ${d.address} ${d.rep} ${d.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; }); }
 
-    // Aggregate sold points by small grid cell to emphasize local COUNT peaks
-    function aggregateByCell(records, cellDeg){
-      const buckets = new Map();
-      records.forEach(r=>{
-        const i = Math.floor(r.lat / cellDeg);
-        const j = Math.floor(r.lon / cellDeg);
-        const key = i+','+j;
-        let b = buckets.get(key);
-        if (!b) { b = { sumLat:0, sumLon:0, n:0 }; buckets.set(key,b); }
-        b.sumLat += r.lat; b.sumLon += r.lon; b.n += 1;
-      });
-      const points = [];
-      buckets.forEach(b=>{ points.push([ b.sumLat/b.n, b.sumLon/b.n, Math.min(2.2, Math.max(0.6, b.n )) ]); });
-      return points;
-    }
+    function aggregateByCell(records, cellDeg){ const buckets=new Map(); records.forEach(r=>{ const i=Math.floor(r.lat/cellDeg); const j=Math.floor(r.lon/cellDeg); const key=i+','+j; let b=buckets.get(key); if(!b){ b={sumLat:0,sumLon:0,n:0}; buckets.set(key,b);} b.sumLat+=r.lat; b.sumLon+=r.lon; b.n+=1; }); const points=[]; buckets.forEach(b=>{ points.push([ b.sumLat/b.n, b.sumLon/b.n, Math.min(2.2, Math.max(0.6, b.n )) ]); }); return points; }
 
-    function render(){ clearErr(); const statusEl=document.getElementById('status'); const {baseSel,viewSel,heatOn}=currentFilters(); if(baseSel==='street'){ if(map.hasLayer(baseSat)) map.removeLayer(baseSat); if(!map.hasLayer(baseStreet)) baseStreet.addTo(map); prefs.base='street'; } else { if(map.hasLayer(baseStreet)) map.removeLayer(baseStreet); if(!map.hasLayer(baseSat)) baseSat.addTo(map); prefs.base='satellite'; } const records=applyFilters(); clusterLayer.clearLayers(); dotsLayer.clearLayers(); function mk(d){ const color=STATUS_COLORS[d.status]||'#1976d2'; const m=L.circleMarker([d.lat,d.lon],{radius:10,color:'#000',weight:2,fillColor:color,fillOpacity:1.0}); m.bindPopup(popupHtml(d)); return m; }
-      if(viewSel==='cluster'){ records.forEach(d=>clusterLayer.addLayer(mk(d))); }
-      else if(viewSel==='dots'){ records.forEach(d=>mk(d).addTo(dotsLayer)); }
-      // if viewSel==='none' we skip markers entirely
-
-      // Heat overlay — COUNT emphasis via cell aggregation
-      if(heatLayer){ if(heatOn){ if(!map.hasLayer(heatLayer)) map.addLayer(heatLayer);
-          const soldAll = allRecords.filter(r=>r.status==='Sold');
-          const soldSubset = soldAll.filter(r=>{ const {repSel,q}=currentFilters(); if(repSel!=='*' && r.rep!==repSel) return false; if(q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; });
-          // cell size ~0.003° (~300m). Increase for coarser aggregation.
-          const points = aggregateByCell(soldSubset, 0.003);
-          heatLayer.setLatLngs(points);
-        } else { if(map.hasLayer(heatLayer)) map.removeLayer(heatLayer); } }
+    function render(){ clearErr(); const statusEl=document.getElementById('status'); const {baseSel,viewSel,heatOn}=currentFilters(); if(baseSel==='street'){ if(map.hasLayer(baseSat)) map.removeLayer(baseSat); if(!map.hasLayer(baseStreet)) baseStreet.addTo(map); prefs.base='street'; } else { if(map.hasLayer(baseStreet)) map.removeLayer(baseStreet); if(!map.hasLayer(baseSat)) baseSat.addTo(map); prefs.base='satellite'; } const records=applyFilters(); clusterLayer.clearLayers(); dotsLayer.clearLayers(); function mk(d){ const color=STATUS_COLORS[d.status]||'#1976d2'; const m=L.circleMarker([d.lat,d.lon],{radius:10,color:'#000',weight:2,fillColor:color,fillOpacity:1.0}); m.bindPopup(popupHtml(d)); return m; } if(viewSel==='cluster'){ records.forEach(d=>clusterLayer.addLayer(mk(d))); } else if(viewSel==='dots'){ records.forEach(d=>mk(d).addTo(dotsLayer)); }
+      if(heatLayer){ if(heatOn){ if(!map.hasLayer(heatLayer)) map.addLayer(heatLayer); const soldAll=allRecords.filter(r=>r.status==='Sold'); const soldSubset=soldAll.filter(r=>{ const {repSel,q}=currentFilters(); if(repSel!=='*' && r.rep!==repSel) return false; if(q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; }); const points=aggregateByCell(soldSubset, 0.003); heatLayer.setLatLngs(points); } else { if(map.hasLayer(heatLayer)) map.removeLayer(heatLayer); } }
       statusEl.textContent=`Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${records.length.toLocaleString()} records in view.`; const {repSel,statusSel,q,heatOn:h}=currentFilters(); prefs.repSel=repSel; prefs.statusSel=statusSel; prefs.q=q; prefs.view=viewSel; prefs.heat=h; savePrefs(prefs); }
 
-    function buildControls(){ const reps=Array.from(new Set(allRecords.map(r=>r.rep||'(Unknown)'))).sort((a,b)=>a.localeCompare(b)); const repSel=document.getElementById('rep'); reps.forEach(r=>{ const opt=document.createElement('option'); opt.value=r; opt.textContent=r; repSel.appendChild(opt); }); document.getElementById('search').addEventListener('input',render); repSel.addEventListener('change',render); document.querySelectorAll('input[name=status]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=view]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=base]').forEach(el=>el.addEventListener('change',render)); document.getElementById('heatToggle').addEventListener('change',render); document.getElementById('gotoBtn').addEventListener('click',gotoAddress); document.getElementById('search').addEventListener('keydown',ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); gotoAddress(); } }); }
+    function buildControls(){ const reps=Array.from(new Set(allRecords.map(r=>r.rep||'(Unknown)'))).sort((a,b)=>a.localeCompare(b)); const repSel=document.getElementById('rep'); reps.forEach(r=>{ const opt=document.createElement('option'); opt.value=r; opt.textContent=r; repSel.appendChild(opt); }); document.getElementById('search').addEventListener('input',render); repSel.addEventListener('change',render); document.querySelectorAll('input[name=status]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=view]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=base]').forEach(el=>el.addEventListener('change',render)); document.getElementById('heatToggle').addEventListener('change',render); document.getElementById('gotoBtn').addEventListener('click',gotoAddress); document.getElementById('search').addEventListener('keydown',ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); gotoAddress(); } }); document.getElementById('locateBtn').addEventListener('click',useMyLocation); }
 
     function restorePrefs(){ try{ if(prefs.base){ const el=document.querySelector(`input[name=base][value=${prefs.base}]`); if(el) el.checked=true; } if(prefs.view){ const el=document.querySelector(`input[name=view][value=${prefs.view}]`); if(el) el.checked=true; } if(prefs.repSel){ const repSel=document.getElementById('rep'); if([...repSel.options].some(o=>o.value===prefs.repSel)) repSel.value=prefs.repSel; } if(prefs.statusSel){ const el=document.querySelector(`input[name=status][value='${prefs.statusSel}']`); if(el) el.checked=true; } if(typeof prefs.heat==='boolean'){ document.getElementById('heatToggle').checked=prefs.heat; } if(prefs.q){ document.getElementById('search').value=prefs.q; } if(prefs.center && typeof prefs.center.lat==='number' && typeof prefs.center.lng==='number' && typeof prefs.zoom==='number'){ map.setView([prefs.center.lat,prefs.center.lng], prefs.zoom); } } catch(e){ console.warn('restorePrefs failed', e); } }
 
     async function gotoAddress(){ const btn=document.getElementById('gotoBtn'); const q=document.getElementById('search').value.trim(); if(!q) return; btn.disabled=true; btn.textContent='⏳'; try{ const resp=await fetch(NOMINATIM+encodeURIComponent(q),{headers:{'Accept':'application/json'}}); const arr=await resp.json(); if(Array.isArray(arr) && arr.length>0){ const lat=parseFloat(arr[0].lat), lon=parseFloat(arr[0].lon); if(isFinite(lat)&&isFinite(lon)){ if(gotoMarker) map.removeLayer(gotoMarker); gotoMarker=L.marker([lat,lon],{title:q}); gotoMarker.addTo(map); map.setView([lat,lon], Math.max(map.getZoom(),15)); prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); } else { showErr('Address not found'); } } else { showErr('Address not found'); } } catch(e){ showErr('Geocoding failed'); console.error(e); } finally { btn.disabled=false; btn.textContent='📍 Go'; setTimeout(clearErr, 3000); } }
 
-    function start(){ buildMap(); buildControls(); restorePrefs(); render(); }
+    function useMyLocation(){ if(!navigator.geolocation){ showErr('Geolocation not supported'); setTimeout(clearErr,3000); return; } const btn=document.getElementById('locateBtn'); btn.disabled=true; btn.textContent='🎯…'; navigator.geolocation.getCurrentPosition(function(pos){ const lat=pos.coords.latitude, lon=pos.coords.longitude; const ll=[lat,lon]; // show pin
+        if(meMarker) map.removeLayer(meMarker); meMarker=L.marker(ll, { title:'My location' }); meMarker.addTo(map);
+        // Default view: center on me with zoom 15, within NM bounds if possible
+        const inNM = lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon;
+        map.setView(ll, 15);
+        if(inNM){ map.setMaxBounds(L.latLngBounds(L.latLng(NM.minLat,NM.minLon), L.latLng(NM.maxLat,NM.maxLon)).pad(0.1)); }
+        prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs);
+        btn.disabled=false; btn.textContent='🎯 My location';
+      }, function(err){ showErr('Location failed: '+(err&&err.message?err.message:'unknown')); setTimeout(clearErr,3000); btn.disabled=false; btn.textContent='🎯 My location'; }, { enableHighAccuracy:true, timeout:8000, maximumAge:30000 }); }
 
-    // Load libs then CSV
-    (function init(){
-      const scripts = [
-        ['https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js','https://unpkg.com/papaparse@5.4.1/papaparse.min.js'],
-        ['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'],
-        ['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js']
-      ];
-      function chain(i){ if(i>=scripts.length){ Papa.parse('data.csv?v='+Date.now(), { download:true, header:true, skipEmptyLines:true, error: err=>showErr('Failed to load data.csv'), complete: res=>{ allRecords=(res.data||[]).map(normalizeRow).filter(r=>r.inNM); start(); } }); return; }
-        loadScript(scripts[i], ()=>chain(i+1)); }
-      chain(0);
-    })();
+    function start(){ buildMap(); buildControls(); restorePrefs(); render(); // Try auto-locate on first load if we have no saved center
+      if(!prefs.center){ useMyLocation(); } }
+
+    (function init(){ const scripts=[ ['https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js','https://unpkg.com/papaparse@5.4.1/papaparse.min.js'], ['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], ['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'] ]; function chain(i){ if(i>=scripts.length){ Papa.parse('data.csv?v='+Date.now(), { download:true, header:true, skipEmptyLines:true, error: err=>showErr('Failed to load data.csv'), complete: res=>{ allRecords=(res.data||[]).map(normalizeRow).filter(r=>r.inNM); start(); } }); return; } loadScript(scripts[i], ()=>chain(i+1)); } chain(0); })();
   </script>
 </body>
 </html>
