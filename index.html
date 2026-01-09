@@ -4,8 +4,8 @@
 <head>
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <title>Door-To-Door Map — Aggressive Sales Heat</title>
-  <meta name='build' content='nmMapPrefs_v6'>
+  <title>Door-To-Door Map — Sales Count Heat + Marker None Mode</title>
+  <meta name='build' content='nmMapPrefs_v7'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css'>
@@ -40,8 +40,9 @@
     <div class='panel' id='viewPanel'>
       <label>View:</label>
       <label><input type='radio' name='view' value='cluster' checked> Cluster markers</label>
-      <label><input type='radio' name='view' value='dots'> Show dots</label>
-      <label><input type='checkbox' id='heatToggle'> Heatmap (Sales only)</label>
+      <label><input type='radio' name='view' value='dots'> Dots</label>
+      <label><input type='radio' name='view' value='none'> None</label>
+      <label><input type='checkbox' id='heatToggle' checked> Heatmap (Sales only)</label>
     </div>
     <div class='panel'>
       <div>
@@ -71,7 +72,7 @@
   <script>
     const NM = { minLat:31.33, maxLat:37.0, minLon:-109.06, maxLon:-103.0 };
     const STATUS_COLORS = { 'Sold':'#00e676', 'Not Sold':'#ff1744' };
-    const LS_KEY = 'nmMapPrefs_v6';
+    const LS_KEY = 'nmMapPrefs_v7';
     const NOMINATIM = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=';
 
     function loadPrefs(){ try{ const raw = localStorage.getItem(LS_KEY); return raw? JSON.parse(raw) : {}; }catch(e){ return {}; } }
@@ -89,8 +90,8 @@
     function loadScript(srcs, onload){ (function t(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) t(i+1); else showErr('Script load failed: '+srcs[i]); }; document.head.appendChild(s); })(0); }
 
     function buildMap(){ map=L.map('map'); baseStreet=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}); baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'}); baseSat.addTo(map); const sw=L.latLng(NM.minLat,NM.minLon), ne=L.latLng(NM.maxLat,NM.maxLon); const b=L.latLngBounds(sw,ne); map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1)); clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15}); dotsLayer=L.layerGroup().addTo(map); if(L.heatLayer){
-        // Aggressive heat settings: larger radius, lower blur, minOpacity, and higher max
-        heatLayer=L.heatLayer([], { radius: 40, blur: 12, maxZoom: 17, minOpacity: 0.25, max: 1.5 });
+        // Aggressive heat tuned for COUNT peaks
+        heatLayer=L.heatLayer([], { radius: 48, blur: 10, maxZoom: 17, minOpacity: 0.35, max: 2.0 });
         map.addLayer(heatLayer);
       } else { heatLayer=null; console.warn('leaflet.heat not available'); }
       map.addLayer(clusterLayer);
@@ -101,14 +102,33 @@
     function currentFilters(){ const repSel=document.getElementById('rep').value; const statusSel=document.querySelector('input[name=status]:checked').value; const q=document.getElementById('search').value.trim().toLowerCase(); const baseSel=document.querySelector('input[name=base]:checked').value; const viewSel=document.querySelector('input[name=view]:checked').value; const heatOn=document.getElementById('heatToggle').checked; return {repSel,statusSel,q,baseSel,viewSel,heatOn}; }
     function applyFilters(){ const {repSel,statusSel,q}=currentFilters(); return allRecords.filter(d=>{ if(repSel!=='*' && d.rep!==repSel) return false; if(statusSel!=='*' && d.status!==statusSel) return false; if(q){ const t=`${d.prospect} ${d.address} ${d.rep} ${d.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; }); }
 
-    function render(){ clearErr(); const statusEl=document.getElementById('status'); const {baseSel,viewSel,heatOn}=currentFilters(); if(baseSel==='street'){ if(map.hasLayer(baseSat)) map.removeLayer(baseSat); if(!map.hasLayer(baseStreet)) baseStreet.addTo(map); prefs.base='street'; } else { if(map.hasLayer(baseStreet)) map.removeLayer(baseStreet); if(!map.hasLayer(baseSat)) baseSat.addTo(map); prefs.base='satellite'; } const records=applyFilters(); clusterLayer.clearLayers(); dotsLayer.clearLayers(); function mk(d){ const color=STATUS_COLORS[d.status]||'#1976d2'; const m=L.circleMarker([d.lat,d.lon],{radius:10,color:'#000',weight:2,fillColor:color,fillOpacity:1.0}); m.bindPopup(popupHtml(d)); return m; } if(viewSel==='cluster'){ records.forEach(d=>clusterLayer.addLayer(mk(d))); } else { records.forEach(d=>mk(d).addTo(dotsLayer)); }
-      // Heat overlay — aggressive weighting: Sold points weighted by price (normalized), fallback weight 1
+    // Aggregate sold points by small grid cell to emphasize local COUNT peaks
+    function aggregateByCell(records, cellDeg){
+      const buckets = new Map();
+      records.forEach(r=>{
+        const i = Math.floor(r.lat / cellDeg);
+        const j = Math.floor(r.lon / cellDeg);
+        const key = i+','+j;
+        let b = buckets.get(key);
+        if (!b) { b = { sumLat:0, sumLon:0, n:0 }; buckets.set(key,b); }
+        b.sumLat += r.lat; b.sumLon += r.lon; b.n += 1;
+      });
+      const points = [];
+      buckets.forEach(b=>{ points.push([ b.sumLat/b.n, b.sumLon/b.n, Math.min(2.2, Math.max(0.6, b.n )) ]); });
+      return points;
+    }
+
+    function render(){ clearErr(); const statusEl=document.getElementById('status'); const {baseSel,viewSel,heatOn}=currentFilters(); if(baseSel==='street'){ if(map.hasLayer(baseSat)) map.removeLayer(baseSat); if(!map.hasLayer(baseStreet)) baseStreet.addTo(map); prefs.base='street'; } else { if(map.hasLayer(baseStreet)) map.removeLayer(baseStreet); if(!map.hasLayer(baseSat)) baseSat.addTo(map); prefs.base='satellite'; } const records=applyFilters(); clusterLayer.clearLayers(); dotsLayer.clearLayers(); function mk(d){ const color=STATUS_COLORS[d.status]||'#1976d2'; const m=L.circleMarker([d.lat,d.lon],{radius:10,color:'#000',weight:2,fillColor:color,fillOpacity:1.0}); m.bindPopup(popupHtml(d)); return m; }
+      if(viewSel==='cluster'){ records.forEach(d=>clusterLayer.addLayer(mk(d))); }
+      else if(viewSel==='dots'){ records.forEach(d=>mk(d).addTo(dotsLayer)); }
+      // if viewSel==='none' we skip markers entirely
+
+      // Heat overlay — COUNT emphasis via cell aggregation
       if(heatLayer){ if(heatOn){ if(!map.hasLayer(heatLayer)) map.addLayer(heatLayer);
-          // Compute max price among Sold for normalization
           const soldAll = allRecords.filter(r=>r.status==='Sold');
-          const maxPrice = Math.max(1, ...soldAll.map(r=> (typeof r.priceNum==='number' && isFinite(r.priceNum)) ? r.priceNum : 1));
           const soldSubset = soldAll.filter(r=>{ const {repSel,q}=currentFilters(); if(repSel!=='*' && r.rep!==repSel) return false; if(q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; });
-          const points = soldSubset.map(r=>{ const w = (typeof r.priceNum==='number' && isFinite(r.priceNum)) ? Math.min(1.5, Math.max(0.3, r.priceNum / maxPrice)) : 0.8; return [r.lat, r.lon, w]; });
+          // cell size ~0.003° (~300m). Increase for coarser aggregation.
+          const points = aggregateByCell(soldSubset, 0.003);
           heatLayer.setLatLngs(points);
         } else { if(map.hasLayer(heatLayer)) map.removeLayer(heatLayer); } }
       statusEl.textContent=`Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${records.length.toLocaleString()} records in view.`; const {repSel,statusSel,q,heatOn:h}=currentFilters(); prefs.repSel=repSel; prefs.statusSel=statusSel; prefs.q=q; prefs.view=viewSel; prefs.heat=h; savePrefs(prefs); }
