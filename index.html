@@ -4,7 +4,7 @@
 <head>
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
-  <title>Door-To-Door Interactive Map (NM-only) — Satellite + Sales Heat + Address Go-To</title>
+  <title>Door-To-Door Map — Heatmap Fix + Safe Init</title>
   <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'>
   <link rel='stylesheet' href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css'>
@@ -15,7 +15,6 @@
     .panel label { font-size: 14px; font-weight: 600; }
     .search-input { flex: 1; min-width: 220px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 14px; }
     .btn { background:#0067b8; color:#fff; border:none; border-radius:6px; padding:8px 10px; font-weight:700; cursor:pointer; }
-    .btn:disabled { opacity: 0.6; cursor: default; }
     .chip { padding: 6px 10px; border-radius: 20px; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
     .legend { position:absolute; bottom:10px; right:10px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:8px; font-size:13px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
     .legend-item { display:flex; align-items:center; gap:6px; margin:4px 0; }
@@ -27,29 +26,22 @@
 </head>
 <body>
   <div id='toolbar'>
-    <!-- Search -->
     <div class='panel'>
       <label for='search'>Search:</label>
       <input id='search' class='search-input' type='text' placeholder='Prospect, address, sales rep or result...' />
       <button id='gotoBtn' class='btn' title='Go to address'>📍 Go</button>
     </div>
-
-    <!-- Base map toggle -->
     <div class='panel' id='basePanel'>
       <label>Base map:</label>
       <label><input type='radio' name='base' value='satellite' checked> Satellite</label>
       <label><input type='radio' name='base' value='street'> Street</label>
     </div>
-
-    <!-- View options -->
     <div class='panel' id='viewPanel'>
       <label>View:</label>
       <label><input type='radio' name='view' value='cluster' checked> Cluster markers</label>
       <label><input type='radio' name='view' value='dots'> Show dots</label>
       <label><input type='checkbox' id='heatToggle'> Heatmap (Sales only)</label>
     </div>
-
-    <!-- Filters -->
     <div class='panel'>
       <div>
         <label for='rep'>Rep:</label>
@@ -65,53 +57,30 @@
   </div>
 
   <div id='map'></div>
-  <div id='status'>Filtered to New Mexico bounds: lat 31.33–37.0, lng -109.06–-103.0.</div>
-  <div id='error'>Map libraries failed to load. Your network may block CDNs. Try another browser/network or ask IT to allow unpkg.com, jsDelivr, and tile servers.</div>
+  <div id='status'>Loading…</div>
+  <div id='error'></div>
 
   <div class='legend'>
     <div><strong>Legend:</strong></div>
-    <div class='legend-item'><span class='dot' style='background:#00e676;'></span> Sold (high‑vis green)</div>
-    <div class='legend-item'><span class='dot' style='background:#ff1744;'></span> Not Sold (high‑vis red)</div>
+    <div class='legend-item'><span class='dot' style='background:#00e676;'></span> Sold</div>
+    <div class='legend-item'><span class='dot' style='background:#ff1744;'></span> Not Sold</div>
   </div>
 
   <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
   <script>
-    // Helper: load scripts with fallback
-    function loadScript(srcs, onload){
-      (function tryLoad(i){
-        var s=document.createElement('script'); s.src=srcs[i];
-        s.onload=onload;
-        s.onerror=function(){ if(i+1<srcs.length) tryLoad(i+1); else document.getElementById('error').style.display='block'; };
-        document.head.appendChild(s);
-      })(0);
-    }
-
-    // Load libs then start
-    loadScript([
-      'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
-      'https://unpkg.com/papaparse@5.4.1/papaparse.min.js'
-    ], function(){
-      loadScript(['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], function(){
-        loadScript(['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'], start);
-      });
-    });
-
-    // Constants
+    // === Helpers & constants (defined first so they exist before callbacks) ===
     const NM = { minLat:31.33, maxLat:37.0, minLon:-109.06, maxLon:-103.0 };
-    const STATUS_COLORS = { 'Sold':'#00e676', 'Not Sold':'#ff1744' }; // high‑visibility palette
-    const LS_KEY = 'nmMapPrefs_v3';
-    const NOMINATIM = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q='; // address geocoder
+    const STATUS_COLORS = { 'Sold':'#00e676', 'Not Sold':'#ff1744' };
+    const LS_KEY = 'nmMapPrefs_v4';
+    const NOMINATIM = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=';
 
-    // Preferences: load/save
-    function loadPrefs(){
-      try{ const raw = localStorage.getItem(LS_KEY); return raw? JSON.parse(raw) : {}; }catch(e){ return {}; }
-    }
+    function loadPrefs(){ try{ const raw = localStorage.getItem(LS_KEY); return raw? JSON.parse(raw) : {}; }catch(e){ return {}; } }
     function savePrefs(p){ try{ localStorage.setItem(LS_KEY, JSON.stringify(p)); }catch(e){} }
+    function showErr(msg){ const box=document.getElementById('error'); box.style.display='block'; box.textContent=msg; }
+    function clearErr(){ const box=document.getElementById('error'); box.style.display='none'; box.textContent=''; }
 
-    // Header normalization
     function normalizeHeader(h){
-      const zwnbsp='\ufeff';
-      let x=String(h||'').replace(new RegExp(zwnbsp,'g'),'').trim().toLowerCase();
+      const z='\ufeff'; let x=String(h||'').replace(new RegExp(z,'g'),'').trim().toLowerCase();
       if(['appointment date','date','appt date'].includes(x)) return 'date';
       if(['address','street'].includes(x)) return 'address';
       if(['prospect: prospect name','prospect','customer','name'].includes(x)) return 'prospect';
@@ -122,19 +91,15 @@
       if(['result','status','result detail'].includes(x)) return 'result';
       return x;
     }
-
-    // Numeric cleaning
     function toNum(v){ if(v==null) return null; const s=String(v); const s2=s.replace(/[^0-9.+-]/g,''); const n=Number.parseFloat(s2); return Number.isFinite(n)?n:null; }
-
-    // Row normalization
     function normalizeRow(row){
       const rec={}; for(const k in row) rec[normalizeHeader(k)] = row[k];
-      const lat=toNum(rec.lat); let lon=toNum(rec.lon); if(lon!=null) lon = -Math.abs(lon);
-      const inNM = (lat!=null && lon!=null && lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon);
+      const lat=toNum(rec.lat); let lon=toNum(rec.lon); if(lon!=null) lon=-Math.abs(lon);
+      const inNM=(lat!=null && lon!=null && lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon);
       const priceNum=toNum(rec.price); const priceFmt=priceNum!=null? priceNum.toLocaleString(undefined,{style:'currency',currency:'USD'}) : '';
       let dateStr=''; if(rec.date){ const d=new Date(rec.date); if(!isNaN(d)){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), da=String(d.getDate()).padStart(2,'0'); dateStr=`${y}-${m}-${da}`; }}
       const resultRaw=String(rec.result||'').trim();
-      const statusNorm = (resultRaw==='Sold') ? 'Sold' : 'Not Sold';
+      const statusNorm=(resultRaw==='Sold')?'Sold':'Not Sold';
       return { lat, lon, inNM, prospect:String(rec.prospect||''), address:String(rec.address||''), rep:String(rec.rep||''), result:resultRaw, status:statusNorm, price:priceFmt, date:dateStr };
     }
 
@@ -143,206 +108,63 @@
     let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker;
     let prefs = loadPrefs();
 
-    function start(){
-      const statusEl=document.getElementById('status');
-      Papa.parse('data.csv?v='+Date.now(), {
-        download:true, header:true, skipEmptyLines:true,
-        error: function(err){ document.getElementById('error').style.display='block'; statusEl.textContent='Failed to load data.csv'; console.error(err); },
-        complete: function(res){
-          const rows = res.data||[];
-          allRecords = rows.map(normalizeRow).filter(r=>r.inNM);
-          buildMap(); buildControls(); restorePrefs(); render();
-        }
-      });
-    }
+    // === Library loader with fallback ===
+    function loadScript(srcs, onload){ (function tryLoad(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) tryLoad(i+1); else showErr('Script load failed: '+srcs[i]); }; document.head.appendChild(s); })(0); }
 
+    // === Build map & layers (heat created once) ===
     function buildMap(){
-      map = L.map('map');
-      // Base layers
-      baseStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' });
-      baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 19,
-        attribution: 'Tiles \u00A9 Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'
-      });
-      baseSat.addTo(map); // default satellite
-
-      // Bounds (NM)
-      const southWest = L.latLng(NM.minLat, NM.minLon), northEast = L.latLng(NM.maxLat, NM.maxLon);
-      const bounds = L.latLngBounds(southWest, northEast);
-      map.fitBounds(bounds, {padding:[20,20]});
-      map.setMaxBounds(bounds.pad(0.1));
-
-      clusterLayer = L.markerClusterGroup({ showCoverageOnHover:false, disableClusteringAtZoom: 15 });
-      dotsLayer = L.layerGroup();
-      // Guard for heat plugin availability
-      if (L.heatLayer){
-        heatLayer = L.heatLayer([], { radius: 28, blur: 20, maxZoom: 17 });
-      } else {
-        heatLayer = null;
-      }
-
+      map=L.map('map');
+      baseStreet=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors'});
+      baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'});
+      baseSat.addTo(map);
+      const sw=L.latLng(NM.minLat, NM.minLon), ne=L.latLng(NM.maxLat, NM.maxLon); const b=L.latLngBounds(sw,ne);
+      map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1));
+      clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15});
+      dotsLayer=L.layerGroup().addTo(map);
+      if(L.heatLayer){ heatLayer=L.heatLayer([], {radius:28, blur:20, maxZoom:17}); } else { heatLayer=null; console.warn('leaflet.heat not available'); }
       map.addLayer(clusterLayer);
-      map.addLayer(dotsLayer);
-
-      // Persist center/zoom
-      map.on('moveend zoomend', function(){
-        prefs.center = map.getCenter();
-        prefs.zoom = map.getZoom();
-        savePrefs(prefs);
-      });
+      map.on('moveend zoomend', ()=>{ prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); });
     }
 
-    function popupHtml(d){
-      const apple = `https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`;
-      const google = `https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`;
-      return `
-        <div style="font-family:Segoe UI, Arial; min-width:240px">
-          <div style="font-size:15px; font-weight:700;">${d.prospect || 'Prospect'}</div>
-          <div style="margin-top:4px;">${d.address || ''}</div>
-          <div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:10px;">
-            <span><strong>Date:</strong> ${d.date || ''}</span>
-            <span><strong>Rep:</strong> ${d.rep || ''}</span>
-            <span><strong>Status:</strong> ${d.status} ${d.result && d.result!=='Sold' ? `(${d.result})` : ''}</span>
-            <span><strong>Price:</strong> ${d.price || ''}</span>
-          </div>
-          <div style="margin-top:8px; display:flex; gap:8px;">
-            <a href="${apple}" target="_blank" rel="noopener">Apple Maps</a>
-            <a href="${google}" target="_blank" rel="noopener">Google Maps</a>
-          </div>
-        </div>`;
-    }
+    function popupHtml(d){ const apple=`https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`; const google=`https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`; return `<div style="font-family:Segoe UI, Arial; min-width:240px"><div style="font-size:15px; font-weight:700;">${d.prospect||'Prospect'}</div><div style="margin-top:4px;">${d.address||''}</div><div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:10px;"><span><strong>Date:</strong> ${d.date||''}</span><span><strong>Rep:</strong> ${d.rep||''}</span><span><strong>Status:</strong> ${d.status} ${d.result && d.result!=='Sold' ? `(${d.result})` : ''}</span><span><strong>Price:</strong> ${d.price||''}</span></div><div style="margin-top:8px; display:flex; gap:8px;"><a href="${apple}" target="_blank" rel="noopener">Apple Maps</a><a href="${google}" target="_blank" rel="noopener">Google Maps</a></div></div>`; }
 
-    function currentFilters(){
-      const repSel = document.getElementById('rep').value;
-      const statusSel = document.querySelector('input[name=status]:checked').value;
-      const q = document.getElementById('search').value.trim().toLowerCase();
-      const baseSel = document.querySelector('input[name=base]:checked').value;
-      const viewSel = document.querySelector('input[name=view]:checked').value;
-      const heatOn = document.getElementById('heatToggle').checked;
-      return { repSel, statusSel, q, baseSel, viewSel, heatOn };
-    }
+    function currentFilters(){ const repSel=document.getElementById('rep').value; const statusSel=document.querySelector('input[name=status]:checked').value; const q=document.getElementById('search').value.trim().toLowerCase(); const baseSel=document.querySelector('input[name=base]:checked').value; const viewSel=document.querySelector('input[name=view]:checked').value; const heatOn=document.getElementById('heatToggle').checked; return {repSel,statusSel,q,baseSel,viewSel,heatOn}; }
 
-    function applyFilters(){
-      const {repSel, statusSel, q} = currentFilters();
-      return allRecords.filter(d=>{
-        if (repSel!=='*' && d.rep!==repSel) return false;
-        if (statusSel!=='*' && d.status!==statusSel) return false;
-        if (q){
-          const t = `${d.prospect} ${d.address} ${d.rep} ${d.result}`.toLowerCase();
-          if (!t.includes(q)) return false;
-        }
-        return true;
-      });
-    }
+    function applyFilters(){ const {repSel,statusSel,q}=currentFilters(); return allRecords.filter(d=>{ if(repSel!=='*' && d.rep!==repSel) return false; if(statusSel!=='*' && d.status!==statusSel) return false; if(q){ const t=`${d.prospect} ${d.address} ${d.rep} ${d.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; }); }
 
     function render(){
-      const statusEl=document.getElementById('status');
-      const {baseSel, viewSel, heatOn} = currentFilters();
+      clearErr();
+      const statusEl=document.getElementById('status'); const {baseSel,viewSel,heatOn}=currentFilters();
+      if(baseSel==='street'){ if(map.hasLayer(baseSat)) map.removeLayer(baseSat); if(!map.hasLayer(baseStreet)) baseStreet.addTo(map); prefs.base='street'; } else { if(map.hasLayer(baseStreet)) map.removeLayer(baseStreet); if(!map.hasLayer(baseSat)) baseSat.addTo(map); prefs.base='satellite'; }
+      const records=applyFilters(); clusterLayer.clearLayers(); dotsLayer.clearLayers();
+      function mk(d){ const color=STATUS_COLORS[d.status]||'#1976d2'; const m=L.circleMarker([d.lat,d.lon],{radius:10,color:'#000',weight:2,fillColor:color,fillOpacity:1.0}); m.bindPopup(popupHtml(d)); return m; }
+      if(viewSel==='cluster'){ records.forEach(d=>clusterLayer.addLayer(mk(d))); } else { records.forEach(d=>mk(d).addTo(dotsLayer)); }
+      // Heat overlay — update points; hide/show without affecting markers
+      if(heatLayer){ if(heatOn){ const sold=allRecords.filter(r=>r.status==='Sold').filter(r=>{ const {repSel,q}=currentFilters(); if(repSel!=='*' && r.rep!==repSel) return false; if(q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; } return true; }); heatLayer.setLatLngs(sold.map(r=>[r.lat,r.lon])); if(!map.hasLayer(heatLayer)) map.addLayer(heatLayer); } else { if(map.hasLayer(heatLayer)) map.removeLayer(heatLayer); } }
+      statusEl.textContent=`Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${records.length.toLocaleString()} records in view.`;
+      const {repSel,statusSel,q,heatOn:h}=currentFilters(); prefs.repSel=repSel; prefs.statusSel=statusSel; prefs.q=q; prefs.view=viewSel; prefs.heat=h; savePrefs(prefs);
+    }
 
-      // Base layer switch
-      if (baseSel==='street'){
-        if (map.hasLayer(baseSat)) map.removeLayer(baseSat);
-        if (!map.hasLayer(baseStreet)) baseStreet.addTo(map);
-        prefs.base = 'street';
-      } else {
-        if (map.hasLayer(baseStreet)) map.removeLayer(baseStreet);
-        if (!map.hasLayer(baseSat)) baseSat.addTo(map);
-        prefs.base = 'satellite';
-      }
+    function buildControls(){ const reps=Array.from(new Set(allRecords.map(r=>r.rep||'(Unknown)'))).sort((a,b)=>a.localeCompare(b)); const repSel=document.getElementById('rep'); reps.forEach(r=>{ const opt=document.createElement('option'); opt.value=r; opt.textContent=r; repSel.appendChild(opt); }); document.getElementById('search').addEventListener('input',render); repSel.addEventListener('change',render); document.querySelectorAll('input[name=status]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=view]').forEach(el=>el.addEventListener('change',render)); document.querySelectorAll('input[name=base]').forEach(el=>el.addEventListener('change',render)); document.getElementById('heatToggle').addEventListener('change',render); document.getElementById('gotoBtn').addEventListener('click',gotoAddress); document.getElementById('search').addEventListener('keydown',ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); gotoAddress(); } }); }
 
-      // Build markers first (so heat toggling never blanks them)
-      const records = applyFilters();
-      clusterLayer.clearLayers();
-      dotsLayer.clearLayers();
+    function restorePrefs(){ try{ if(prefs.base){ const el=document.querySelector(`input[name=base][value=${prefs.base}]`); if(el) el.checked=true; } if(prefs.view){ const el=document.querySelector(`input[name=view][value=${prefs.view}]`); if(el) el.checked=true; } if(prefs.repSel){ const repSel=document.getElementById('rep'); if([...repSel.options].some(o=>o.value===prefs.repSel)) repSel.value=prefs.repSel; } if(prefs.statusSel){ const el=document.querySelector(`input[name=status][value='${prefs.statusSel}']`); if(el) el.checked=true; } if(typeof prefs.heat==='boolean'){ document.getElementById('heatToggle').checked=prefs.heat; } if(prefs.q){ document.getElementById('search').value=prefs.q; } if(prefs.center && typeof prefs.center.lat==='number' && typeof prefs.center.lng==='number' && typeof prefs.zoom==='number'){ map.setView([prefs.center.lat,prefs.center.lng], prefs.zoom); } } catch(e){ console.warn('restorePrefs failed', e); }}
 
-      function mk(d){
-        const color = STATUS_COLORS[d.status] || '#1976d2';
-        const m = L.circleMarker([d.lat,d.lon], { radius: 10, color: '#000', weight: 2, fillColor: color, fillOpacity: 1.0 });
-        m.bindPopup(popupHtml(d));
-        return m;
-      }
+    async function gotoAddress(){ const btn=document.getElementById('gotoBtn'); const q=document.getElementById('search').value.trim(); if(!q) return; btn.disabled=true; btn.textContent='⏳'; try{ const resp=await fetch(NOMINATIM+encodeURIComponent(q),{headers:{'Accept':'application/json'}}); const arr=await resp.json(); if(Array.isArray(arr) && arr.length>0){ const lat=parseFloat(arr[0].lat), lon=parseFloat(arr[0].lon); if(isFinite(lat)&&isFinite(lon)){ if(gotoMarker) map.removeLayer(gotoMarker); gotoMarker=L.marker([lat,lon],{title:q}); gotoMarker.addTo(map); map.setView([lat,lon], Math.max(map.getZoom(),15)); prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); } else { showErr('Address not found'); } } else { showErr('Address not found'); } } catch(e){ showErr('Geocoding failed'); console.error(e); } finally { btn.disabled=false; btn.textContent='📍 Go'; setTimeout(clearErr, 3000); } }
 
-      if (viewSel==='cluster'){
-        records.forEach(d=>{ clusterLayer.addLayer(mk(d)); });
-      } else {
-        records.forEach(d=>{ mk(d).addTo(dotsLayer); });
-      }
-
-      // Then manage heat overlay (so markers remain visible even if heat fails)
-      if (heatLayer){
-        if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer);
-        if (heatOn){
-          const soldSubset = allRecords.filter(r=>r.status==='Sold').filter(r=>{
-            const {repSel, q} = currentFilters();
-            if (repSel!=='*' && r.rep!==repSel) return false;
-            if (q){ const t=`${r.prospect} ${r.address} ${r.rep} ${r.result}`.toLowerCase(); if(!t.includes(q)) return false; }
-            return true;
+    // === Start: load libs then CSV ===
+    loadScript(['https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js','https://unpkg.com/papaparse@5.4.1/papaparse.min.js'], function(){
+      loadScript(['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], function(){
+        loadScript(['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'], function(){
+          // Now parse CSV
+          Papa.parse('data.csv?v='+Date.now(), {
+            download:true, header:true, skipEmptyLines:true,
+            error: function(err){ showErr('Failed to load data.csv'); console.error(err); },
+            complete: function(res){ try{ const rows=res.data||[]; allRecords=rows.map(normalizeRow).filter(r=>r.inNM); buildMap(); buildControls(); restorePrefs(); render(); } catch(e){ showErr('Init failed'); console.error(e); }
+            }
           });
-          heatLayer.setLatLngs(soldSubset.map(r=>[r.lat,r.lon]));
-          heatLayer.addTo(map);
-        }
-      }
-
-      // Status banner
-      statusEl.textContent = `Filtered to New Mexico bounds: lat ${NM.minLat}–${NM.maxLat}, lng ${NM.minLon}–${NM.maxLon}. ${records.length.toLocaleString()} records in view.`;
-
-      // Save prefs
-      const {repSel, statusSel, q, heatOn: h} = currentFilters();
-      prefs.repSel = repSel; prefs.statusSel = statusSel; prefs.q = q; prefs.view = viewSel; prefs.heat = h;
-      savePrefs(prefs);
-    }
-
-    function buildControls(){
-      // Populate rep dropdown
-      const reps = Array.from(new Set(allRecords.map(r=>r.rep || '(Unknown)'))).sort((a,b)=>a.localeCompare(b));
-      const repSel = document.getElementById('rep');
-      reps.forEach(r=>{ const opt=document.createElement('option'); opt.value=r; opt.textContent=r; repSel.appendChild(opt); });
-      // Wire events
-      document.getElementById('search').addEventListener('input', render);
-      repSel.addEventListener('change', render);
-      document.querySelectorAll('input[name=status]').forEach(el=> el.addEventListener('change', render));
-      document.querySelectorAll('input[name=view]').forEach(el=> el.addEventListener('change', render));
-      document.querySelectorAll('input[name=base]').forEach(el=> el.addEventListener('change', render));
-      document.getElementById('heatToggle').addEventListener('change', render);
-      document.getElementById('gotoBtn').addEventListener('click', gotoAddress);
-      // Enter to go
-      document.getElementById('search').addEventListener('keydown', (ev)=>{ if(ev.key==='Enter'){ ev.preventDefault(); gotoAddress(); } });
-    }
-
-    async function gotoAddress(){
-      const btn = document.getElementById('gotoBtn');
-      const q = document.getElementById('search').value.trim();
-      if (!q){ return; }
-      btn.disabled = true; btn.textContent = '⏳';
-      try{
-        const resp = await fetch(NOMINATIM + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } });
-        const arr = await resp.json();
-        if (Array.isArray(arr) && arr.length>0){
-          const lat = parseFloat(arr[0].lat), lon = parseFloat(arr[0].lon);
-          if (isFinite(lat) && isFinite(lon)){
-            // Add/replace a temporary marker and center
-            if (gotoMarker){ map.removeLayer(gotoMarker); }
-            gotoMarker = L.marker([lat, lon], { title: q });
-            gotoMarker.addTo(map);
-            map.setView([lat, lon], Math.max(map.getZoom(), 15));
-            // Save center/zoom
-            prefs.center = map.getCenter(); prefs.zoom = map.getZoom(); savePrefs(prefs);
-          } else {
-            notify('Address not found');
-          }
-        } else {
-          notify('Address not found');
-        }
-      }catch(e){ notify('Geocoding failed'); console.error(e); }
-      finally{ btn.disabled = false; btn.textContent = '📍 Go'; }
-    }
-
-    function notify(msg){
-      const box = document.getElementById('error');
-      box.style.display = 'block';
-      box.textContent = msg;
-      setTimeout(()=>{ box.style.display='none'; }, 3000);
-    }
+        });
+      });
+    });
   </script>
 </body>
 </html>
