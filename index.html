@@ -96,9 +96,9 @@
 
     let allRecords=[]; let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker, meMarker, meIcon; let watchId=null; let isFollowing=false; let prefs=loadPrefs();
 
-    function loadScript(srcs, onload){ (function t(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) t(i+1); else showErr('Script load failed: '+srcs[i]+' — check HTTPS/mixed content and network.'); }; document.head.appendChild(s); })(0); }
+    function loadScript(srcs, onload){ (function t(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) t(i+1); else showErr('Script load failed: '+srcs[i]); }; document.head.appendChild(s); })(0); }
 
-    function buildMap(){ map=L.map('map'); baseStreet=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors', crossOrigin:true}); baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'}); baseSat.addTo(map); const sw=L.latLng(NM.minLat,NM.minLon), ne=L.latLng(NM.maxLat,NM.maxLon); const b=L.latLngBounds(sw,ne); map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1)); clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15}); dotsLayer=L.layerGroup().addTo(map); if(L.heatLayer){ heatLayer=L.heatLayer([], { radius: 48, blur: 10, maxZoom: 17, minOpacity: 0.35, max: 2.0 }); map.addLayer(heatLayer); } else { heatLayer=null; console.warn('leaflet.heat not available'); } map.addLayer(clusterLayer); map.on('moveend zoomend', ()=>{ prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); }); }
+    function buildMap(){ map=L.map('map'); baseStreet=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}); baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USGS, USDA, NGA, NASA'}); baseSat.addTo(map); const sw=L.latLng(NM.minLat,NM.minLon), ne=L.latLng(NM.maxLat,NM.maxLon); const b=L.latLngBounds(sw,ne); map.fitBounds(b,{padding:[20,20]}); map.setMaxBounds(b.pad(0.1)); clusterLayer=L.markerClusterGroup({showCoverageOnHover:false, disableClusteringAtZoom:15}); dotsLayer=L.layerGroup().addTo(map); if(L.heatLayer){ heatLayer=L.heatLayer([], { radius: 48, blur: 10, maxZoom: 17, minOpacity: 0.35, max: 2.0 }); map.addLayer(heatLayer); } else { heatLayer=null; console.warn('leaflet.heat not available'); } map.addLayer(clusterLayer); map.on('moveend zoomend', ()=>{ prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs); }); }
 
     function popupHtml(d){ const apple=`https://maps.apple.com/?q=${encodeURIComponent(d.address)}&ll=${d.lat},${d.lon}`; const google=`https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}`; return `<div style="font-family:Segoe UI, Arial; min-width:240px"><div style="font-size:15px; font-weight:700;">${d.prospect||'Prospect'}</div><div style="margin-top:4px;">${d.address||''}</div><div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:10px;"><span><strong>Date:</strong> ${d.date||''}</span><span><strong>Rep:</strong> ${d.rep||''}</span><span><strong>Status:</strong> ${d.status} ${d.result && d.result!=='Sold' ? `(${d.result})` : ''}</span><span><strong>Price:</strong> ${d.price||''}</span></div><div style="margin-top:8px; display:flex; gap:8px;"><a href="${apple}" target="_blank" rel="noopener">Apple Maps</a><a href="${google}" target="_blank" rel="noopener">Google Maps</a></div></div>`; }
 
@@ -122,34 +122,22 @@
       if(watchId!=null){ try{ navigator.geolocation.clearWatch(watchId); }catch(e){} watchId=null; }
       isFollowing=false;
       const btn=document.getElementById('locateBtn');
-      btn.disabled=false;
-      btn.textContent='\uD83C\uDFAF My location';
+      btn.disabled=false; btn.textContent='\uD83C\uDFAF My location';
     }
-
     function ensureMeIcon(){
-      if(!meIcon){
-        meIcon = L.divIcon({
-          className: '',
-          iconSize: [16,16],
-          iconAnchor: [8,8],
-          html: '<div class="pulse-pin"><span class="pulse-ring"></span><span class="pulse-core"></span></div>'
-        });
-      }
+      if(!meIcon){ meIcon=L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8], html:'<div class="pulse-pin"><span class="pulse-ring"></span><span class="pulse-core"></span></div>' }); }
       return meIcon;
     }
-
     function useMyLocation(){
       if(!navigator.geolocation){ showErr('Geolocation not supported'); setTimeout(clearErr,3000); return; }
       const btn=document.getElementById('locateBtn');
       if(isFollowing){ stopFollowing(); return; }
       btn.disabled=true; btn.textContent='\uD83C\uDFAF…';
       const onFix=(pos,initial)=>{
-        const lat=pos.coords.latitude, lon=pos.coords.longitude; const ll=[lat,lon];
+        const ll=[pos.coords.latitude, pos.coords.longitude];
         ensureMeIcon();
-        if(!meMarker){ meMarker=L.marker(ll,{ icon:meIcon, title:'My location', zIndexOffset:1000 }).addTo(map); }
-        else { meMarker.setLatLng(ll); }
-        const inNM = lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon;
-        if(initial){ map.setView(ll, Math.max(map.getZoom()||0, 15), { animate:true }); if(inNM){ map.setMaxBounds(L.latLngBounds(L.latLng(NM.minLat,NM.minLon), L.latLng(NM.maxLat,NM.maxLon)).pad(0.1)); } }
+        if(!meMarker){ meMarker=L.marker(ll,{ icon:meIcon, title:'My location', zIndexOffset:1000 }).addTo(map); } else { meMarker.setLatLng(ll); }
+        if(initial){ map.setView(ll, Math.max(map.getZoom()||0, 15), { animate:true }); }
         else { map.panTo(ll, { animate:true }); }
         prefs.center=map.getCenter(); prefs.zoom=map.getZoom(); savePrefs(prefs);
       };
@@ -164,18 +152,10 @@
 }
 
     function start(){ buildMap(); buildControls(); restorePrefs(); render(); // Try auto-locate on first load if we have no saved center
-      if(!prefs.center){ useMyLocation(); } }
+      // Auto-locate disabled to avoid secure-context prompts
+      // if(!prefs.center){ useMyLocation(); } }
 
-    (function init(){ const scripts=[ ['https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js','https://unpkg.com/papaparse@5.4.1/papaparse.min.js'], ['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], ['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'] ]; function chain(i){ if(i>=scripts.length){ Papa.parse('data.csv?v='+Date.now(), { download:true, header:true, skipEmptyLines:true, error: err=>showErr('Failed to load data.csv — ensure it is next to this HTML and served by your local server.'), complete: res=>{ allRecords=(res.data||[]).map(normalizeRow).filter(r=>r.inNM); start();
-      
-    (function envChecks(){
-      const isFile = location.protocol === 'file:';
-      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
-      if(isFile){ showErr('Opened as file:// — please run via a local server for map + geolocation.'); }
-      if(!isSecure){ showErr('Use HTTPS or localhost for geolocation and external tiles.'); }
-      setTimeout(clearErr, 5000);
-    })();
- } }); return; } loadScript(scripts[i], ()=>chain(i+1)); } chain(0); })();
+    (function init(){ const scripts=[ ['https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js','https://unpkg.com/papaparse@5.4.1/papaparse.min.js'], ['https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'], ['https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js'] ]; function chain(i){ if(i>=scripts.length){ Papa.parse('data.csv?v='+Date.now(), { download:true, header:true, skipEmptyLines:true, error: err=>showErr('Failed to load data.csv'), complete: res=>{ allRecords=(res.data||[]).map(normalizeRow).filter(r=>r.inNM); start(); } }); return; } loadScript(scripts[i], ()=>chain(i+1)); } chain(0); })();
   </script>
 </body>
 </html>
