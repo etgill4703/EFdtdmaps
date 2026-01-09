@@ -94,7 +94,7 @@
     function normalizeRow(row){ const rec={}; for(const k in row) rec[normalizeHeader(k)] = row[k]; const lat=toNum(rec.lat); let lon=toNum(rec.lon); if(lon!=null) lon=-Math.abs(lon); const inNM=(lat!=null && lon!=null && lat>=NM.minLat && lat<=NM.maxLat && lon>=NM.minLon && lon<=NM.maxLon); const priceNum=toNum(rec.price); const priceFmt=priceNum!=null? priceNum.toLocaleString(undefined,{style:'currency',currency:'USD'}) : ''; let dateStr=''; if(rec.date){ const d=new Date(rec.date); if(!isNaN(d)){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), da=String(d.getDate()).padStart(2,'0'); dateStr=`${y}-${m}-${da}`; }} const resultRaw=String(rec.result||'').trim(); const statusNorm=(resultRaw==='Sold')?'Sold':'Not Sold'; return { lat, lon, inNM, prospect:String(rec.prospect||''), address:String(rec.address||''), rep:String(rec.rep||''), result:resultRaw, status:statusNorm, priceNum, price:priceFmt, date:dateStr };
     }
 
-    let allRecords=[]; let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker, meMarker, meIcon; let watchId=null; let isFollowing=false; let prefs=loadPrefs();
+    let allRecords=[]; let map, baseStreet, baseSat, clusterLayer, dotsLayer, heatLayer, gotoMarker, meMarker, meIcon; let prefs=loadPrefs();
 
     function loadScript(srcs, onload){ (function t(i){ const s=document.createElement('script'); s.src=srcs[i]; s.onload=onload; s.onerror=function(){ if(i+1<srcs.length) t(i+1); else showErr('Script load failed: '+srcs[i]); }; document.head.appendChild(s); })(0); }
 
